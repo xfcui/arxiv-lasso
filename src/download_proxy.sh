@@ -19,7 +19,7 @@ SSH_PID=""
 ensure_port_free() {
     local port=$1
     local pid
-    pid=$(lsof -ti :"$port" || true)
+    pid=$(lsof -ti :"$port" | head -n 1 || true)
     if [ -n "$pid" ]; then
         echo "Port $port is in use by PID $pid. Killing it..."
         kill -9 "$pid" || true
@@ -40,7 +40,7 @@ start_tunnel() {
     local retries=5
     while [ $retries -gt 0 ]; do
         if lsof -ti :"$PROXY_PORT" > /dev/null; then
-            SSH_PID=$(lsof -ti :"$PROXY_PORT")
+            SSH_PID=$(lsof -ti :"$PROXY_PORT" | head -n 1)
             echo "SSH tunnel established (PID: $SSH_PID)"
             return 0
         fi
@@ -83,7 +83,7 @@ else
     echo "No command provided. Running default download sequence..."
     
     echo "--- Starting non-proxy downloads ---"
-    python src/download_rss.py || echo "Warning: download_rss.py failed"
+    #python src/download_rss.py || echo "Warning: download_rss.py failed"
     python src/download_springer.py || echo "Warning: download_springer.py failed"
 
     # Sequence 1: SDU Proxy

@@ -16,6 +16,7 @@ are appended to nobody.log.
 
 import argparse
 import json
+import os
 import sys
 import time
 import xml.etree.ElementTree as ET
