@@ -1,0 +1,47 @@
+---
+description: Security rules for handling .env files and sensitive information
+globs: **/.env*, .gitignore
+alwaysApply: true
+---
+
+# .env Security and Best Practices
+
+To prevent accidental exposure of secrets and ensure secure environment management:
+
+## 1. Never Commit .env Files
+- **Rule**: `.env` files must NEVER be committed to version control.
+- **Action**: Always add `.env` to `.gitignore` immediately.
+- **Verification**: Check `git status` to ensure `.env` is not tracked.
+
+## 2. Use Template Files
+- **Rule**: Provide a `.env.example` or `.env.template` file with dummy values.
+- **Action**: Create a `.env.example` file that lists all required keys without their actual values.
+
+## 3. Secret Management
+- **Rule**: Do not hardcode secrets in the codebase.
+- **Action**: Use environment variables for API keys, passwords, and other sensitive data.
+
+## 4. Handling Leaks
+- **Rule**: If a secret is accidentally committed, it must be rotated immediately.
+- **Action**: Revoke the compromised key and generate a new one.
+
+## Examples
+
+### ❌ BAD: Committing .env
+```bash
+git add .env
+git commit -m "Add environment variables"
+```
+
+### ✅ GOOD: Using .gitignore
+```text: .gitignore
+.env
+.env.local
+.env.*.local
+```
+
+### ✅ GOOD: Providing a template
+```text: .env.example
+API_KEY=your_api_key_here
+DATABASE_URL=postgres://user:password@localhost:5432/db
+```

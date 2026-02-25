@@ -1,0 +1,44 @@
+---
+description: Standards for creating attractive, user-friendly README files
+alwaysApply: true
+---
+
+# README Standards
+
+Create READMEs that welcome new users and get them productive fast.
+
+## Structure
+
+1. **Title with emoji** - Set a friendly tone (e.g., `# 📄 Project Name`)
+2. **Badges** - Show Python version, license, build status
+3. **One-liner** - Explain what it does in plain language
+4. **Key Features** - Bullet list with emoji markers (✨)
+5. **Quick Start** - Get running in 3 steps or less
+6. **Detailed Usage** - Full options for power users
+7. **Contributing/License** - Standard sections at bottom
+
+## Quick Start Pattern
+
+Always include a numbered workflow:
+
+```markdown
+## 🚀 Quick Start
+
+### 1. Installation
+\`\`\`bash
+git clone <repo>
+pip install -r requirements.txt
+\`\`\`
+
+### 2. Basic Usage
+\`\`\`bash
+python -m myapp <input>
+\`\`\`
+```
+
+## Tone Guidelines
+
+- Use **you/your** - speak directly to the reader
+- Lead with benefits, not features
+- Keep code examples copy-paste ready
+- Use horizontal rules (`---`) to separate major sections

@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "Academic Journal Scraper",
+  "version": "1.1.0",
+  "description": "Efficiently extract research article metadata and HTML from Nature, Cell Press, and Science journals for academic analysis.",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "downloads",
+    "downloads.shelf",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://www.cell.com/*",
+    "https://www.science.org/*",
+    "https://www.nature.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.cell.com/*/issue*",
+        "https://www.science.org/toc/*",
+        "https://www.nature.com/search*",
+        "https://www.nature.com/*/volumes/*/issues/*"
+      ],
+      "js": ["content.js"]
+    }
+  ]
+}

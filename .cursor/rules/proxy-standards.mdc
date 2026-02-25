@@ -1,0 +1,58 @@
+---
+description: Enforce SSH proxy for all network-related operations and scripts
+globs: **/*.{py,sh}, .env*
+alwaysApply: false
+---
+
+# Network Proxy Standards
+
+All network operations (API calls, downloads, external requests) MUST be routed through the configured SSH proxy to ensure reliable connectivity and bypass potential network restrictions.
+
+## 1. Environment Configuration
+- Use `.env` to store proxy configuration.
+- Required variables:
+  - `SSH_PROXY_USER_HOST`: SSH destination (e.g., `user@host`).
+  - `SSH_PROXY_PORT`: Local SOCKS5 port (default: `1080`).
+  - `ALL_PROXY`: SOCKS5 proxy URL (e.g., `socks5h://localhost:1080`).
+
+## 2. Shell Scripts
+- Use `src/download_proxy.sh` as a template for wrapping scripts that require network access.
+- Always start the SSH tunnel before network operations and ensure it is killed on exit.
+
+\`\`\`bash
+# ❌ BAD: Direct execution
+python src/download_articles.py
+
+# ✅ GOOD: Execution via proxy wrapper
+./src/download_proxy.sh
+\`\`\`
+
+## 3. Python Implementation
+- Use `PySocks` (`socks`) and `socket.setdefaulttimeout` to globally configure the proxy.
+- Respect the `ALL_PROXY` environment variable.
+
+\`\`\`python
+# ✅ GOOD: Global proxy configuration in Python
+import os
+import socks
+import socket
+import urllib.parse
+from dotenv import load_dotenv
+
+load_dotenv()
+proxy_url = os.getenv("ALL_PROXY")
+if proxy_url:
+    parsed = urllib.parse.urlparse(proxy_url)
+    if parsed.scheme in ("socks5", "socks5h"):
+        socks.set_default_proxy(
+            socks.SOCKS5, 
+            parsed.hostname or "localhost", 
+            parsed.port or 1080, 
+            rdns=(parsed.scheme == "socks5h")
+        )
+        socket.socket = socks.socksocket
+\`\`\`
+
+## 4. Security
+- NEVER commit actual proxy credentials or hostnames to version control.
+- Use `.env.example` to document required proxy variables.

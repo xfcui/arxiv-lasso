@@ -1,0 +1,45 @@
+---
+description: Python coding standards for the converter project
+globs: "**/*.py"
+alwaysApply: false
+---
+
+# Python Coding Standards
+
+## Code Style
+- Follow PEP 8 conventions
+- Use type hints for all function signatures
+- Maximum line length: 100 characters
+- Use `pathlib.Path` instead of `os.path` for file operations
+
+## Naming Conventions
+- Functions and variables: `snake_case`
+- Classes: `PascalCase`
+- Constants: `UPPER_SNAKE_CASE`
+- Private members: prefix with single underscore `_`
+
+## Imports
+```python
+# Standard library first, then third-party, then local
+import sys
+from pathlib import Path
+
+import click  # third-party
+
+from arxiv_prism.parsers import HTMLParser  # local
+```
+
+## Error Handling
+```python
+# Always use specific exception types
+class ConversionError(Exception):
+    """Raised when document conversion fails."""
+    pass
+
+# Provide context in error messages
+raise ConversionError(f"Failed to parse {file_path}: {reason}")
+```
+
+## Documentation
+- All public functions require docstrings (Google style)
+- Include parameter types and return types in docstrings
