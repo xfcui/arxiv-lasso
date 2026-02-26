@@ -74,6 +74,8 @@ def is_springer_journal(journal: str) -> bool:
     Returns:
         True if it's a Springer journal.
     """
+    if journal.lower().startswith("nature"):
+        return True
     info = get_journal_info(journal)
     return info is not None and info["abbr"] in ("nature", "ni")
 
