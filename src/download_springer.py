@@ -74,10 +74,19 @@ def is_springer_journal(journal: str) -> bool:
     Returns:
         True if it's a Springer journal.
     """
+    if not journal:
+        return False
+    
     if journal.lower().startswith("nature"):
         return True
+    
+    # Check if it's in our known map
     info = get_journal_info(journal)
-    return info is not None and info["abbr"] in ("nature", "ni")
+    if info is not None and info["abbr"] in ("nature", "ni"):
+        return True
+        
+    # Fallback: any journal with "Nature" in the name is likely a Springer Nature journal
+    return "nature" in journal.lower()
 
 
 def article_id_from_url(url: str) -> str | None:
@@ -222,17 +231,17 @@ def parse_batch_jats_response(text: str) -> tuple[dict[str, str], set[str]]:
 def process_one_batch(
     api_key: str,
     batch: list[tuple[dict[str, Any], Path, str]],
-) -> tuple[list[dict[str, Any]], set[str]]:
+) -> tuple[list[dict[str, Any]], set[str], bool]:
     """
     Fetch JATS for one batch of (article, out_path, doi), write XML files.
-    Return (failures, article_ids_with_no_body).
+    Return (failures, article_ids_with_no_body, stop_requested).
     
     Args:
         api_key: The API key.
         batch: A list of (article metadata, output path, DOI) tuples.
         
     Returns:
-        A tuple of (list of failure info, set of IDs without body).
+        A tuple of (list of failure info, set of IDs without body, bool stop_requested).
     """
     dois = [doi for _, _, doi in batch]
     id_to_path = {article_id_from_url(a["url"]): p for a, p, _ in batch}
@@ -245,7 +254,10 @@ def process_one_batch(
             r = fetch_jats_batch(api_key, dois)
             if r.status_code != 200:
                 last_error = f"HTTP {r.status_code}"
-                if r.status_code == 429 or r.status_code >= 500:
+                if r.status_code == 429:
+                    print("\nError 429: Too Many Requests. Stopping download.")
+                    return [], set(), True
+                if r.status_code >= 500:
                     if attempt < MAX_RETRIES - 1:
                         time.sleep(RETRY_BACKOFF_SEC * (attempt + 1))
                     continue
@@ -266,7 +278,7 @@ def process_one_batch(
                 for aid in id_to_path
                 if aid not in by_id and aid not in no_body_ids
             ]
-            return failures, no_body_ids
+            return failures, no_body_ids, False
 
         except requests.RequestException as e:
             last_error = str(e)
@@ -274,7 +286,7 @@ def process_one_batch(
                 time.sleep(RETRY_BACKOFF_SEC * (attempt + 1))
 
     failures = [{"doi": doi, "reason": last_error or "unknown"} for _, _, doi in batch]
-    return failures, set()
+    return failures, set(), False
 
 
 def main() -> None:
@@ -375,47 +387,77 @@ def main() -> None:
     doi_to_journal = {doi: a.get("journal", "") for a, _, doi in to_fetch}
 
     start_time = time.perf_counter()
+    stop_requested_global = False
     with tqdm(total=len(to_fetch), desc="Downloading", unit="art") as pbar:
         with ThreadPoolExecutor(max_workers=PARALLEL_WORKERS) as executor:
             futures = {
                 executor.submit(process_one_batch, api_key, batch): batch
                 for batch in batches
             }
-            for future in as_completed(futures):
-                batch = futures[future]
-                try:
-                    batch_failures, batch_no_body = future.result()
-                    failures.extend(batch_failures)
-                    articles_without_body |= batch_no_body
-                    
-                    # Update journal stats
-                    for f_entry in batch_failures:
-                        j_name = doi_to_journal.get(f_entry.get("doi"), "")
-                        if j_name: journal_stats[j_name]["failed"] += 1
-                    
-                    for nb_id in batch_no_body:
-                        # Find journal for this no-body ID
-                        for a, p, doi in to_fetch:
-                            if article_id_from_url(a.get("url", "")) == nb_id:
-                                journal_stats[a.get("journal", "")]["no_body"] += 1
-                                break
-                    
-                    # Calculate saved for this batch
-                    batch_saved_count = len(batch) - len(batch_failures) - len(batch_no_body)
-                    if batch_saved_count > 0:
-                        # This is a bit complex since we need to know which journal each saved article belongs to
-                        # For simplicity, we'll just track the total saved and then calculate per-journal saved at the end
-                        pass
+            try:
+                for future in as_completed(futures):
+                    batch = futures[future]
+                    try:
+                        batch_failures, batch_no_body, stop_requested = future.result()
+                        failures.extend(batch_failures)
+                        articles_without_body |= batch_no_body
+                        
+                        # Update journal stats
+                        for f_entry in batch_failures:
+                            j_name = doi_to_journal.get(f_entry.get("doi"), "")
+                            if j_name: journal_stats[j_name]["failed"] += 1
+                        
+                        for nb_id in batch_no_body:
+                            # Find journal for this no-body ID
+                            for a, p, doi in to_fetch:
+                                if article_id_from_url(a.get("url", "")) == nb_id:
+                                    journal_stats[a.get("journal", "")]["no_body"] += 1
+                                    break
+                        
+                        if stop_requested:
+                            stop_requested_global = True
+                            # Cancel pending futures and break loop
+                            executor.shutdown(wait=False, cancel_futures=True)
+                            break
 
-                except Exception as e:
-                    for _, _, doi in batch:
-                        failures.append({"doi": doi, "reason": str(e)})
-                        j_name = doi_to_journal.get(doi, "")
-                        if j_name: journal_stats[j_name]["failed"] += 1
-                pbar.update(len(batch))
+                    except Exception as e:
+                        for _, _, doi in batch:
+                            failures.append({"doi": doi, "reason": str(e)})
+                            j_name = doi_to_journal.get(doi, "")
+                            if j_name: journal_stats[j_name]["failed"] += 1
+                    pbar.update(len(batch))
+            finally:
+                # Ensure we shutdown the executor (if not already done)
+                executor.shutdown(wait=False, cancel_futures=True)
+
+    # If we stopped early, mark all remaining to_fetch items as failed
+    if stop_requested_global:
+        # Find which DOIs were actually completed (either saved, failed, or no_body)
+        completed_dois = set()
+        for f in failures:
+            if "doi" in f: completed_dois.add(f["doi"])
+        # This is tricky because we don't have a simple list of saved DOIs here,
+        # but we can infer them from the files that were created.
+        # However, a simpler way is to track what was actually processed in the loop.
+        
+        # Let's refine the logic: any article in to_fetch that isn't accounted for
+        # in failures or articles_without_body and doesn't have an output file
+        # should be considered failed due to the early stop.
+        for article, out_path, doi in to_fetch:
+            if not out_path.exists() and doi not in completed_dois:
+                # Check if it was one of the no_body ones
+                aid = article_id_from_url(article.get("url", ""))
+                if aid not in articles_without_body:
+                    failures.append({"doi": doi, "reason": "stopped due to 429 error"})
+                    j_name = article.get("journal", "")
+                    if j_name in journal_stats:
+                        journal_stats[j_name]["failed"] += 1
 
     # Finalize saved stats per journal
     for j_name, stats in journal_stats.items():
+        # If stop_requested was True, some articles in journal_stats["processed"] 
+        # might not have been actually processed or failed yet.
+        # But for the final table, we want Saved to only reflect what was actually saved.
         stats["saved"] = stats["processed"] - stats["failed"] - stats["no_body"]
 
     elapsed = time.perf_counter() - start_time
@@ -426,6 +468,10 @@ def main() -> None:
     print("-" * 95)
     for j_name in sorted(journal_stats.keys()):
         s = journal_stats[j_name]
+        # Only show journals that belong to Springer/Nature
+        if not (is_springer_journal(j_name) or "nature.com" in j_name.lower() or "springer" in j_name.lower()):
+            continue
+
         total = s["found"]
         # Rate is 1 - (Failed / Found)
         rate = (1 - (s["failed"] / total)) * 100 if total > 0 else 0

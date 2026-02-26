@@ -501,7 +501,7 @@ def main() -> None:
 
     today = datetime.date.today()
     current_year = today.year
-    start_year = current_year - 2
+    start_year = current_year - 1
 
     existing_pmcids = _collect_existing_pmcids(Path("data/ncbi"))
     initial_count = len(existing_pmcids)
