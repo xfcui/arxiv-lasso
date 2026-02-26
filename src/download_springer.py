@@ -31,7 +31,7 @@ from tqdm import tqdm
 from common import load_articles, path_safe_journal, setup_proxy, year_from_date
 from config import get_journal_info
 
-DEFAULT_DATA_GLOB: list[str] = ["metadata/**/*.json", "chrome/nature/**/*.json", "chrome/ni/**/*.json"]
+DEFAULT_DATA_GLOB: list[str] = ["metadata/**/*.json", "chrome/nature/**/*.json", "chrome/ni/**/*.json", "chrome/search/**/*.json"]
 DEFAULT_OUTPUT_DIR: str = "data/springer"
 JATS_BASE_URL: str = "https://api.springernature.com/openaccess/jats"
 BATCH_SIZE: int = 10
@@ -107,7 +107,13 @@ def output_path(article: dict[str, Any], output_dir: str) -> Path | None:
     aid = article_id_from_url(article.get("url", ""))
     if not aid:
         return None
-    year = year_from_date(article.get("date") or "")
+    date_val = article.get("date") or ""
+    year = year_from_date(date_val)
+    # #region agent log
+    from datetime import datetime
+    with open('/home/gateway/ncbi/.cursor/debug-cd2cd4.log', 'a') as f:
+        import json as j; f.write(j.dumps({"sessionId":"cd2cd4","hypothesisId":"D","location":"download_springer.py:111","message":"Output path calculation","data":{"url":article.get("url"),"date":date_val,"year":year},"timestamp":int(datetime.now().timestamp()*1000)}) + "\n")
+    # #endregion
     journal = path_safe_journal(article.get("journal") or "")
     return Path(output_dir) / year / journal / f"{aid}.xml"
 
@@ -305,13 +311,18 @@ def main() -> None:
     seen_dois: set[str] = set()
     duplicated = 0
 
+    # Track stats per journal
+    journal_stats: dict[str, dict[str, int]] = {}
+
     for article in articles:
         url = article.get("url", "")
         journal = article.get("journal", "")
-        if not is_springer_url(url) and not is_springer_journal(journal):
-            not_springer += 1
-            continue
         
+        # Initialize journal stats
+        if journal not in journal_stats:
+            journal_stats[journal] = {"found": 0, "processed": 0, "saved": 0, "no_body": 0, "failed": 0, "already_exists": 0, "not_springer": 0}
+        
+        # Deduplication check for stats
         doi = (article.get("doi") or "").strip()
         if not doi:
             # Fallback for chrome/nature and chrome/ni where DOI might be missing in metadata
@@ -319,24 +330,37 @@ def main() -> None:
             aid = article_id_from_url(url)
             if aid and aid.startswith("s"):
                 doi = f"10.1038/{aid}"
-            else:
-                failures.append({"url": url, "reason": "missing doi in metadata and could not derive from id"})
-                continue
-
-        if doi in seen_dois:
+        
+        if doi and doi in seen_dois:
             duplicated += 1
             continue
-        seen_dois.add(doi)
+        if doi:
+            seen_dois.add(doi)
+        
+        journal_stats[journal]["found"] += 1
+
+        if not is_springer_url(url) and not is_springer_journal(journal):
+            not_springer += 1
+            journal_stats[journal]["not_springer"] += 1
+            continue
+        
+        if not doi:
+            failures.append({"url": url, "reason": "missing doi in metadata and could not derive from id"})
+            journal_stats[journal]["failed"] += 1
+            continue
 
         out_path = output_path(article, args.output_dir)
         if out_path is None:
             failures.append({"url": url, "reason": "could not derive article id"})
+            journal_stats[journal]["failed"] += 1
             continue
         if out_path.exists():
             already_exists += 1
+            journal_stats[journal]["already_exists"] += 1
             continue
         
         to_fetch.append((article, out_path, doi))
+        journal_stats[journal]["processed"] += 1
 
     print(f"Articles to process: {len(to_fetch)}")
     print(f"  Already exists: {already_exists}")
@@ -344,6 +368,9 @@ def main() -> None:
 
     batch_size = max(1, args.batch_size)
     batches = [to_fetch[i: i + batch_size] for i in range(0, len(to_fetch), batch_size)]
+
+    # Map DOI back to journal for stats tracking
+    doi_to_journal = {doi: a.get("journal", "") for a, _, doi in to_fetch}
 
     start_time = time.perf_counter()
     with tqdm(total=len(to_fetch), desc="Downloading", unit="art") as pbar:
@@ -358,16 +385,52 @@ def main() -> None:
                     batch_failures, batch_no_body = future.result()
                     failures.extend(batch_failures)
                     articles_without_body |= batch_no_body
+                    
+                    # Update journal stats
+                    for f_entry in batch_failures:
+                        j_name = doi_to_journal.get(f_entry.get("doi"), "")
+                        if j_name: journal_stats[j_name]["failed"] += 1
+                    
+                    for nb_id in batch_no_body:
+                        # Find journal for this no-body ID
+                        for a, p, doi in to_fetch:
+                            if article_id_from_url(a.get("url", "")) == nb_id:
+                                journal_stats[a.get("journal", "")]["no_body"] += 1
+                                break
+                    
+                    # Calculate saved for this batch
+                    batch_saved_count = len(batch) - len(batch_failures) - len(batch_no_body)
+                    if batch_saved_count > 0:
+                        # This is a bit complex since we need to know which journal each saved article belongs to
+                        # For simplicity, we'll just track the total saved and then calculate per-journal saved at the end
+                        pass
+
                 except Exception as e:
                     for _, _, doi in batch:
                         failures.append({"doi": doi, "reason": str(e)})
+                        j_name = doi_to_journal.get(doi, "")
+                        if j_name: journal_stats[j_name]["failed"] += 1
                 pbar.update(len(batch))
+
+    # Finalize saved stats per journal
+    for j_name, stats in journal_stats.items():
+        stats["saved"] = stats["processed"] - stats["failed"] - stats["no_body"]
 
     elapsed = time.perf_counter() - start_time
     saved = len(to_fetch) - len(failures) - len(articles_without_body)
 
     print(f"\n--- Stats ---")
-    print(f"  Saved:        {saved}")
+    print(f"{'Journal':<40} {'Found':<8} {'ToProc':<8} {'Saved':<8} {'Failed':<8} {'Exist':<8} {'Rate':<8}")
+    print("-" * 95)
+    for j_name in sorted(journal_stats.keys()):
+        s = journal_stats[j_name]
+        total = s["found"]
+        # Rate is 1 - (Failed / Found)
+        rate = (1 - (s["failed"] / total)) * 100 if total > 0 else 0
+        print(f"{j_name[:39]:<40} {s['found']:<8} {s['processed']:<8} {s['saved']:<8} {s['failed']:<8} {s['already_exists']:<8} {rate:>6.1f}%")
+    
+    print("-" * 95)
+    print(f"  Total Saved:  {saved}")
     print(f"  No body:      {len(articles_without_body)}")
     print(f"  Failures:     {len(failures)}")
     print(f"  Total tasks:  {len(to_fetch)}")

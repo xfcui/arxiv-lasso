@@ -4,7 +4,6 @@
 node_modules/
 __pycache__/
 *.pyc
-*.log
 .DS_Store
 
 external/
@@ -12,3 +11,4 @@ metadata/
 chrome/
 data/
 
+*.log

@@ -38,7 +38,8 @@ def parse_publication_date(s: str) -> datetime | None:
     if not s or not isinstance(s, str):
         return None
     s = s.strip()
-    for fmt in ("%Y-%m-%d", "%b %d, %Y", "%b %Y", "%d %b %Y", "%d %B %Y"):
+    # Added %Y/%m/%d and %Y.%m.%d to support more formats
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d", "%b %d, %Y", "%b %Y", "%d %b %Y", "%d %B %Y"):
         try:
             return datetime.strptime(s, fmt)
         except ValueError:
@@ -105,7 +106,7 @@ def load_articles(data_glob: str | tuple[str, ...]) -> list[dict[str, Any]]:
 
         # Handle top-level metadata (journal, publicationDate) for articles within
         top_journal = data.get("journal")
-        top_date = data.get("publicationDate")
+        top_date = data.get("publicationDate") or data.get("pubdate") or data.get("date")
 
         articles_raw = data.get("articles", data) if isinstance(data, dict) else data
         items: list[dict[str, Any]] = (
@@ -123,8 +124,13 @@ def load_articles(data_glob: str | tuple[str, ...]) -> list[dict[str, Any]]:
             # Inherit top-level metadata if missing in item
             if top_journal and not item.get("journal"):
                 item["journal"] = top_journal
-            if top_date and not item.get("date"):
+            
+            # Use item's own publicationDate or date if available, otherwise use top_date
+            item_date = item.get("publicationDate") or item.get("date")
+            if not item_date:
                 item["date"] = top_date
+            else:
+                item["date"] = item_date
                 
             articles.append(item)
 

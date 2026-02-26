@@ -118,6 +118,15 @@ def download_rss_metadata(feeds: dict[str, str], base_output_dir: str = "metadat
     # Ensure year-based output directory exists
     output_dir = Path(base_output_dir) / year
     output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Generate filename based on current date (mmdd.json)
+    output_file = output_dir / f"{mmdd}.json"
+
+    # Skip if output file already exists
+    if output_file.exists():
+        print(f"Output file already exists: {output_file}. Skipping download.")
+        return
+
     print(f"Ensured directory exists: {output_dir}")
 
     for journal_name, url in feeds.items():
@@ -173,9 +182,6 @@ def download_rss_metadata(feeds: dict[str, str], base_output_dir: str = "metadat
             
         except Exception as e:
             print(f"  Error fetching {journal_name}: {e}")
-
-    # Generate filename based on current date (mmdd.json)
-    output_file = output_dir / f"{mmdd}.json"
 
     # Final JSON structure with metadata combined at the top
     output_data = {

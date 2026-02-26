@@ -501,15 +501,32 @@ def main() -> None:
 
     today = datetime.date.today()
     current_year = today.year
-    start_year = current_year - 1
+    start_year = current_year - 2
 
     existing_pmcids = _collect_existing_pmcids(Path("data/ncbi"))
     initial_count = len(existing_pmcids)
 
     total_downloaded = 0
+    journal_stats: dict[str, dict[str, int]] = {}
+
     for year in range(current_year, start_year - 1, -1):
+        # Track unique IDs found this year to avoid double counting across journals
+        # (though NCBI journals are usually distinct, it's good practice)
         for journal in journals:
-            total_downloaded += process_journal_for_year(journal, year, existing_pmcids)
+            if journal not in journal_stats:
+                journal_stats[journal] = {"downloaded": 0}
+            
+            downloaded = process_journal_for_year(journal, year, existing_pmcids)
+            total_downloaded += downloaded
+            journal_stats[journal]["downloaded"] += downloaded
+
+    print(f"\n--- NCBI Stats ---")
+    print(f"{'Journal':<40} {'Downloaded':<12}")
+    print("-" * 55)
+    for journal in sorted(journal_stats.keys()):
+        s = journal_stats[journal]
+        print(f"{journal[:39]:<40} {s['downloaded']:<12}")
+    print("-" * 55)
 
     final_count = len(existing_pmcids)
     tqdm.write(f"Done. Downloaded: {total_downloaded} | Total on disk: {final_count} (was {initial_count})")
