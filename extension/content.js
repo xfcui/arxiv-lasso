@@ -35,10 +35,11 @@
   function scrapeNatureSearchPage() {
     console.log(`${LOG_PREFIX} Scraping Nature Search...`);
     
+    const journalName = extractNatureJournalName();
     const journalCode = extractNatureJournalCode();
     const { totalResults, pageSize } = extractNaturePagination();
     
-    console.log(`${LOG_PREFIX} Journal code: ${journalCode}, Total results: ${totalResults}, Page size: ${pageSize}`);
+    console.log(`${LOG_PREFIX} Journal: ${journalName} (${journalCode}), Total results: ${totalResults}, Page size: ${pageSize}`);
 
     const articleContainers = document.querySelectorAll('article.c-card, li[data-test="article-item"]');
     const articles = Array.from(articleContainers).map(container => {
@@ -50,7 +51,7 @@
       
       const title = titleEl?.textContent.trim() || 'Unknown Title';
       const url = titleEl?.href || null;
-      const journal = journalEl?.textContent.trim() || 'Nature';
+      const journal = journalEl?.textContent.trim() || journalName;
       const publicationDate = dateEl?.getAttribute('datetime') || dateEl?.textContent.trim() || 'Unknown Date';
       const isOA = !!oaEl;
       const type = typeEl?.textContent.trim() || '';
@@ -82,7 +83,7 @@
     sendDataToBackground({
       articles: articles.map(({ type, ...rest }) => rest),
       isNatureSearch: true,
-      journal: journalCode,
+      journal: journalName,
       currentUrl: window.location.href,
       pagination: {
         totalResults,
@@ -95,7 +96,7 @@
   function scrapeNatureIssuePage() {
     console.log(`${LOG_PREFIX} Scraping Nature Issue...`);
     
-    const journal = window.location.pathname.split('/').filter(Boolean)[0] || 'nature';
+    const journal = extractNatureJournalName() || window.location.pathname.split('/').filter(Boolean)[0] || 'nature';
     const issueHeader = document.querySelector('h1[data-container-type="title"]') || document.querySelector('h1.c-issue-header__title') || document.querySelector('h1');
     let publicationDate = issueHeader?.textContent.trim() || 'Unknown Date';
 
@@ -156,8 +157,7 @@
   function scrapeSciencePage() {
     console.log(`${LOG_PREFIX} Scraping Science...`);
     
-    const pathParts = window.location.pathname.split('/').filter(Boolean);
-    const journal = (pathParts[0] === 'toc' && pathParts.length >= 2) ? pathParts[1] : 'science';
+    const journal = extractScienceJournalName();
     
     const issueVolEl = document.querySelector('.journal-issue__vol');
     let publicationDate = 'Unknown Date';
@@ -216,7 +216,7 @@
   function scrapeCellPage() {
     console.log(`${LOG_PREFIX} Scraping Cell...`);
     
-    const journal = window.location.pathname.split('/').filter(Boolean)[0] || 'cell';
+    const journal = extractCellJournalName();
     const issueDateEl = document.querySelector('.toc-header__issue-date, .issue-header__date');
     const publicationDate = issueDateEl?.textContent.trim() || 'Unknown Date';
     
@@ -265,13 +265,70 @@
     try {
       const dataLayerScript = document.querySelector('script[data-test="dataLayer"]');
       if (dataLayerScript) {
-        const match = dataLayerScript.textContent.match(/"journal":"([^"]+)"/);
+        const match = dataLayerScript.textContent.match(/"pcode":"([^"]+)"/);
         if (match) return match[1];
       }
     } catch (e) {
       console.error(`${LOG_PREFIX} Error extracting journal code:`, e);
     }
     return 'nature';
+  }
+
+  function extractNatureJournalName() {
+    try {
+      const dataLayerScript = document.querySelector('script[data-test="dataLayer"]');
+      if (dataLayerScript) {
+        const match = dataLayerScript.textContent.match(/"title":"([^"]+)"/);
+        if (match) return match[1];
+      }
+    } catch (e) {
+      console.error(`${LOG_PREFIX} Error extracting journal name:`, e);
+    }
+    return 'Nature';
+  }
+
+  function extractScienceJournalName() {
+    try {
+      const script = Array.from(document.querySelectorAll('script')).find(s => s.textContent.includes('AAASdataLayer'));
+      if (script) {
+        const match = script.textContent.match(/"pageTitle":"Contents \| ([^0-9,]+)/);
+        if (match) return match[1].trim();
+      }
+    } catch (e) {
+      console.error(`${LOG_PREFIX} Error extracting Science journal name:`, e);
+    }
+    const pathParts = window.location.pathname.split('/').filter(Boolean);
+    return (pathParts[0] === 'toc' && pathParts.length >= 2) ? pathParts[1] : 'Science';
+  }
+
+  function extractCellJournalName() {
+    let name = 'Cell';
+    try {
+      const logoLink = document.querySelector('a#cpIconLnk');
+      if (logoLink && logoLink.title) {
+        name = logoLink.title;
+      } else {
+        const meta = document.querySelector('meta[name="pbContext"]');
+        if (meta) {
+          const match = meta.content.match(/journal:journal:([^;]+)/);
+          if (match) {
+            const code = match[1];
+            name = code.charAt(0).toUpperCase() + code.slice(1);
+          }
+        } else {
+          name = window.location.pathname.split('/').filter(Boolean)[0] || 'Cell';
+        }
+      }
+    } catch (e) {
+      console.error(`${LOG_PREFIX} Error extracting Cell journal name:`, e);
+      name = window.location.pathname.split('/').filter(Boolean)[0] || 'Cell';
+    }
+
+    // Ensure it starts with "Cell"
+    if (!name.startsWith('Cell')) {
+      name = `Cell ${name}`;
+    }
+    return name;
   }
 
   function extractNaturePagination() {

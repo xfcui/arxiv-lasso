@@ -40,10 +40,11 @@ function updateUI(status) {
     if (status.journal) {
       elements.journalBadge.style.display = 'inline-block';
       elements.journalBadge.innerText = status.journal;
-      elements.journalBadge.className = `journal-badge journal-${status.journal.toLowerCase()}`;
+      const journalClass = status.journal.toLowerCase().replace(/\s+/g, '-');
+      elements.journalBadge.className = `journal-badge journal-${journalClass}`;
       
       // Label context
-      elements.issueLabel.innerText = (status.journal === 'nature') ? 'Pages' : 'Issues';
+      elements.issueLabel.innerText = (status.journal.toLowerCase().includes('nature')) ? 'Pages' : 'Issues';
     } else {
       elements.journalBadge.style.display = 'none';
     }

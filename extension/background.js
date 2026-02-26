@@ -128,7 +128,7 @@ function handleScrapedData(data) {
   const yyyymmdd = parsePublicationDate(data.publicationDate);
   const yyyy = yyyymmdd.substring(0, 4);
   const mmdd = yyyymmdd.substring(4);
-  const manifestFilename = `chrome/${data.journal}/${yyyy}/${mmdd}.json`;
+  const manifestFilename = `chrome/${data.journal.toLowerCase().replace(/\s+/g, '_')}/${yyyy}/${mmdd}.json`;
   console.log(`${LOG_PREFIX} Saving: ${manifestFilename}`);
   saveFile(JSON.stringify(manifest, null, 2), manifestFilename, 'application/json');
 
@@ -230,7 +230,8 @@ function saveHtmlForDebug(data) {
   const yyyymmdd = parsePublicationDate(data.publicationDate);
   const yyyy = yyyymmdd.substring(0, 4);
   const mmdd = yyyymmdd.substring(4);
-  const htmlFilename = `chrome/${data.journal}/${yyyy}/${mmdd}.html`;
+  const journalDir = data.journal.toLowerCase().replace(/\s+/g, '_');
+  const htmlFilename = `chrome/${journalDir}/${yyyy}/${mmdd}.html`;
   console.log(`${LOG_PREFIX} Saving HTML: ${htmlFilename}`);
   saveFile(data.htmlContent, htmlFilename, 'text/html');
 }
