@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Academic Journal Scraper",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Efficiently extract research article metadata and HTML from Nature, Cell Press, and Science journals for academic analysis.",
   "permissions": [
     "activeTab",

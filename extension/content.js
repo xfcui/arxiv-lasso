@@ -46,17 +46,36 @@
       const dateEl = container.querySelector('time[itemprop="datePublished"]');
       const journalEl = container.querySelector('[data-test="journal-title-and-link"], .c-meta__item.u-text-bold');
       const oaEl = container.querySelector('[data-test="open-access"]');
-      const typeEl = container.querySelector('[data-test="article-type"]');
+      const typeEl = container.querySelector('[data-test="article-type"], [data-test="article.type"]');
+      
+      const title = titleEl?.textContent.trim() || 'Unknown Title';
+      const url = titleEl?.href || null;
+      const journal = journalEl?.textContent.trim() || 'Nature';
+      const publicationDate = dateEl?.getAttribute('datetime') || dateEl?.textContent.trim() || 'Unknown Date';
+      const isOA = !!oaEl;
+      const type = typeEl?.textContent.trim() || '';
+
+      console.log(`${LOG_PREFIX} Found element:`, { title, type });
       
       return {
-        title: titleEl?.textContent.trim() || 'Unknown Title',
-        url: titleEl?.href || null,
-        journal: journalEl?.textContent.trim() || 'Nature',
-        publicationDate: dateEl?.getAttribute('datetime') || dateEl?.textContent.trim() || 'Unknown Date',
-        isOA: !!oaEl,
-        type: typeEl?.textContent.trim() || ''
+        title,
+        url,
+        journal,
+        publicationDate,
+        isOA,
+        type
       };
-    }).filter(art => art.url && art.type.toLowerCase() === 'article');
+    }).filter(art => {
+      const isMatch = art.url && (
+        art.type.toLowerCase() === 'article' || 
+        art.type.toLowerCase() === 'research' ||
+        art.type === '' // Fallback if type is missing but it's a card
+      );
+      if (!isMatch) {
+        console.log(`${LOG_PREFIX} Filtering out: ${art.title} (type: ${art.type})`);
+      }
+      return isMatch;
+    });
 
     console.log(`${LOG_PREFIX} Found ${articles.length} articles`);
 
