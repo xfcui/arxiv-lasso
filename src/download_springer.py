@@ -243,14 +243,19 @@ def process_batch(api: SpringerAPI, batch: List[Tuple[Dict[str, Any], Path, Path
             try:
                 record = json.loads(mp.read_text(encoding="utf-8"))
                 metadata_by_id[aid] = record
-                if record.get("openaccess") == "true":
-                    xp = id_to_xml_path.get(aid)
-                    if xp and not xp.exists():
-                        oa_dois_to_fetch.append(id_to_doi[aid])
             except (json.JSONDecodeError, IOError):
                 dois_to_fetch_meta.append(id_to_doi[aid])
         else:
             dois_to_fetch_meta.append(id_to_doi[aid])
+
+    # Round 1.5: Determine which OA XMLs to fetch
+    for aid, mp in id_to_meta_path.items():
+        if aid in metadata_by_id:
+            record = metadata_by_id[aid]
+            if record.get("openaccess") == "true":
+                xp = id_to_xml_path.get(aid)
+                if xp and not xp.exists():
+                    oa_dois_to_fetch.append(id_to_doi[aid])
 
     # Fetch metadata if needed
     if dois_to_fetch_meta:
@@ -354,13 +359,7 @@ def main():
             continue
 
         # Quick skip check
-        is_oa = False
-        if mp.exists():
-            try:
-                is_oa = json.loads(mp.read_text(encoding="utf-8")).get("openaccess") == "true"
-            except: pass
-        
-        if mp.exists() and (not is_oa or (xp and xp.exists())):
+        if mp.exists() and xp and xp.exists():
             already_exists += 1
             stats[journal]["exists"] += 1
             continue

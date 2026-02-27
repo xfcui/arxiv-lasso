@@ -90,21 +90,25 @@ def pii_to_compact(pii: str) -> str:
     return pii.replace("-", "").replace("(", "").replace(")", "")
 
 
-def article_output_path(article: dict[str, Any]) -> Path | None:
-    """Compute output path: data/elsevier/<year>/<journal>/<article_id>.xml
+def article_output_paths(article: dict[str, Any]) -> tuple[Path | None, Path | None]:
+    """Compute output paths: 
+    - Metadata: data/elsevier/<year>/<journal>/<article_id>_meta.xml
+    - Full-text: data/elsevier/<year>/<journal>/<article_id>.xml
     
     Args:
         article: The article metadata dictionary.
         
     Returns:
-        The Path object for the output file or None.
+        A tuple of (metadata Path, fulltext Path) or (None, None).
     """
     pii = pii_from_url(article.get("url", ""))
     if not pii:
-        return None
+        return None, None
     year = year_from_date(article.get("date") or "")
     journal = path_safe_journal(article.get("journal") or "")
-    return Path("data/elsevier") / year / journal / f"{pii.replace('/', '_')}.xml"
+    base_path = Path("data/elsevier") / year / journal
+    safe_pii = pii.replace("/", "_")
+    return base_path / f"{safe_pii}_meta.xml", base_path / f"{safe_pii}.xml"
 
 
 def _has_full_content(text: str) -> bool:
@@ -119,18 +123,22 @@ def _has_full_content(text: str) -> bool:
     return any(tag in text for tag in _CONTENT_TAGS)
 
 
-def fetch_article(api_key: str, pii: str, out_path: Path) -> tuple[bool, str | None]:
+def fetch_article(api_key: str, pii: str, meta_path: Path, xml_path: Path, force: bool = False) -> tuple[bool, str | None]:
     """
-    Fetch article XML for the given display PII and save directly to disk.
+    Fetch article metadata and full-text XML for the given display PII.
 
-    Returns (success, error_message). Tries ENTITLED first; if Open Access,
-    retries with FULL view to obtain the complete article body.
+    Returns (success, error_message). 
+    1. Fetches metadata (ENTITLED view) and saves to meta_path if it doesn't exist.
+    2. If Open Access (or force=True), retries with FULL view to obtain the complete article body and saves to xml_path if it doesn't exist.
+    
     Retries up to MAX_RETRIES times on 429 and network errors.
     
     Args:
         api_key: The Elsevier API key.
         pii: The display PII of the article.
-        out_path: The path to save the XML content.
+        meta_path: The path to save the metadata XML.
+        xml_path: The path to save the full-text XML.
+        force: If True, attempt full-text download even for non-OA articles.
         
     Returns:
         A tuple of (success boolean, error message or None).
@@ -139,43 +147,70 @@ def fetch_article(api_key: str, pii: str, out_path: Path) -> tuple[bool, str | N
     url = f"{BASE_URL}/{quote(pii_to_compact(pii), safe='')}"
 
     last_error: str | None = None
-    for attempt in range(MAX_RETRIES):
+    is_oa = False
+    
+    # Step 1: Handle metadata
+    if meta_path.exists():
         try:
-            resp = requests.get(url, headers=headers, params={"view": "ENTITLED"}, timeout=60)
+            content = meta_path.read_text(encoding="utf-8")
+            is_oa = "<status>OPEN_ACCESS</status>" in content
+        except Exception as e:
+            log(f"Error reading existing metadata for {pii}: {e}", level="WARNING")
+    else:
+        for attempt in range(MAX_RETRIES):
+            try:
+                resp = requests.get(url, headers=headers, params={"view": "ENTITLED"}, timeout=60)
 
-            if resp.status_code == 429:
-                # Check for rate limit reset time
-                reset_time = resp.headers.get("X-RateLimit-Reset")
-                if reset_time:
-                    try:
-                        wait_sec = max(0, int(reset_time) - int(time.time())) + 1
-                        if wait_sec > 3600: # If wait is more than an hour, maybe it's the weekly quota
-                            return False, f"Weekly quota exceeded. Resets in {wait_sec/3600:.1f} hours"
-                        log(f"Rate limit hit. Waiting {wait_sec}s for reset (PII: {pii})", level="WARNING")
-                        time.sleep(wait_sec)
-                        continue
-                    except (ValueError, TypeError):
-                        pass
-                
+                if resp.status_code == 429:
+                    # Check for rate limit reset time
+                    reset_time = resp.headers.get("X-RateLimit-Reset")
+                    if reset_time:
+                        try:
+                            wait_sec = max(0, int(reset_time) - int(time.time())) + 1
+                            if wait_sec > 300: # If wait is more than an hour, maybe it's the weekly quota
+                                return False, f"Weekly quota exceeded. Resets in {wait_sec/3600:.1f} hours"
+                            log(f"Rate limit hit. Waiting {wait_sec}s for reset (PII: {pii})", level="WARNING")
+                            time.sleep(wait_sec)
+                            continue
+                        except (ValueError, TypeError):
+                            pass
+                    
+                    if attempt < MAX_RETRIES - 1:
+                        time.sleep(RETRY_BACKOFF_SEC * (attempt + 1))
+                    continue
+
+                if not resp.ok:
+                    last_error = f"HTTP {resp.status_code} (ENTITLED)"
+                    break
+
+                if "<document-entitlement>" not in resp.text:
+                    last_error = "ENTITLED returned no recognizable content"
+                    break
+
+                # Save metadata
+                meta_path.parent.mkdir(parents=True, exist_ok=True)
+                meta_path.write_text(resp.text, encoding="utf-8")
+                is_oa = "<status>OPEN_ACCESS</status>" in resp.text
+                last_error = None # Clear any previous errors
+                break
+
+            except requests.RequestException as e:
+                last_error = str(e)
                 if attempt < MAX_RETRIES - 1:
                     time.sleep(RETRY_BACKOFF_SEC * (attempt + 1))
-                continue
+        
+        if last_error:
+            return False, last_error
 
-            if not resp.ok:
-                last_error = f"HTTP {resp.status_code}"
-                break
+    # Step 2: Handle full-text
+    if xml_path.exists():
+        return True, None
 
-            if "<document-entitlement>" not in resp.text:
-                if _has_full_content(resp.text):
-                    out_path.parent.mkdir(parents=True, exist_ok=True)
-                    out_path.write_text(resp.text, encoding="utf-8")
-                    return True, None
-                last_error = "ENTITLED returned no recognizable content"
-                break
+    if not is_oa and not force:
+        return True, "not entitled (closed access) - metadata exists"
 
-            if "<status>OPEN_ACCESS</status>" not in resp.text:
-                return False, "not entitled (closed access)"
-
+    for attempt in range(MAX_RETRIES):
+        try:
             with requests.get(url, headers=headers, params={"view": "FULL"}, timeout=60, stream=True) as resp_full:
                 if resp_full.status_code == 429:
                     reset_time = resp_full.headers.get("X-RateLimit-Reset")
@@ -194,26 +229,28 @@ def fetch_article(api_key: str, pii: str, out_path: Path) -> tuple[bool, str | N
                     continue
 
                 if resp_full.ok:
-                    out_path.parent.mkdir(parents=True, exist_ok=True)
-                    with open(out_path, "wb") as f:
+                    xml_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(xml_path, "wb") as f:
                         for chunk in resp_full.iter_content(chunk_size=8192):
                             f.write(chunk)
                     return True, None
-            
-            return False, "OA but FULL view returned no usable content"
-
+                
+                last_error = f"HTTP {resp_full.status_code} (FULL)"
+                break
+        
         except requests.RequestException as e:
             last_error = str(e)
             if attempt < MAX_RETRIES - 1:
                 time.sleep(RETRY_BACKOFF_SEC * (attempt + 1))
 
-    return False, last_error or "unknown error"
+    return True, f"OA but FULL view failed: {last_error} - metadata saved/exists"
 
 
 def main() -> None:
     """Main entry point for the Elsevier downloader."""
     parser = argparse.ArgumentParser(description="Fetch Elsevier articles from metadata.")
     parser.add_argument("--debug", action="store_true", help="Work on 10 random articles only.")
+    parser.add_argument("--force", action="store_true", help="Attempt full-text download even for non-OA articles.")
     parser.add_argument(
         "--data-glob", type=str, default=None,
         help=f"Glob for metadata JSON files (default: {DEFAULT_DATA_GLOB}, {CHROME_CELL_GLOB}, {CHROME_IMMUNITY_GLOB}).",
@@ -231,7 +268,7 @@ def main() -> None:
 
     articles = load_articles(data_glob)
 
-    tasks: list[tuple[str, Path]] = []
+    tasks: list[tuple[str, Path, Path]] = []
     seen_piis: set[str] = set()
     duplicated = 0
     not_cell = 0
@@ -254,16 +291,16 @@ def main() -> None:
             continue
         seen_piis.add(pii)
 
-        out_path = article_output_path(article)
-        if out_path is None:
+        meta_path, xml_path = article_output_paths(article)
+        if meta_path is None or xml_path is None:
             continue
-        if out_path.exists():
-            content = out_path.read_text(encoding="utf-8")
-            if "<document-entitlement>" not in content:
-                already_exists += 1
-                continue
         
-        tasks.append((pii, out_path))
+        # Check if we already have what we need
+        if meta_path.exists() and xml_path.exists():
+            already_exists += 1
+            continue
+        
+        tasks.append((pii, meta_path, xml_path))
 
     if args.debug:
         log("Debug mode: selecting 10 random articles.")
@@ -281,21 +318,21 @@ def main() -> None:
 
     with ThreadPoolExecutor(max_workers=PARALLEL_WORKERS) as executor:
         future_to_task = {
-            executor.submit(fetch_article, api_key, pii, out_path): (pii, out_path)
-            for pii, out_path in tasks
+            executor.submit(fetch_article, api_key, pii, meta_path, xml_path, force=args.force): (pii, meta_path, xml_path)
+            for pii, meta_path, xml_path in tasks
         }
         with tqdm(total=len(tasks), desc="Fetching articles", unit="art") as pbar:
             for future in as_completed(future_to_task):
-                pii, out_path = future_to_task[future]
+                pii, meta_path, xml_path = future_to_task[future]
                 try:
                     success, error = future.result()
                     if success:
                         saved += 1
-                    elif error and "not entitled" not in error:
+                        if error and "not entitled" in error:
+                            skipped += 1
+                    elif error:
                         pbar.write(f"Error {pii}: {error}")
                         errors += 1
-                    else:
-                        skipped += 1
                 except Exception as e:
                     pbar.write(f"Exception {pii}: {e}")
                     errors += 1
@@ -303,8 +340,8 @@ def main() -> None:
 
     elapsed = time.perf_counter() - start_time
     log("--- Elsevier Stats ---")
-    log(f"  Saved:        {saved}")
-    log(f"  Skipped:      {skipped} (closed access)")
+    log(f"  Processed:    {saved}")
+    log(f"  Skipped:      {skipped} (closed access metadata saved)")
     log(f"  Errors:       {errors}")
     log(f"  Total tasks:  {len(tasks)}")
     log(f"  Time:         {elapsed:.1f}s")
