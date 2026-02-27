@@ -60,7 +60,6 @@ INITIAL_RETRY_DELAY = 2
 
 # Hardcoded journal list (NLM Title Abbreviation)
 JOURNALS = [
-    "Nat Commun",
     "Sci Adv",
     "Proc Natl Acad Sci U S A",
     "Genome Biol",
@@ -68,8 +67,6 @@ JOURNALS = [
     "Bioinformatics",
     "Brief Bioinform",
     "PLoS Comput Biol",
-    "BMC Bioinformatics",
-    "J Cheminform",
 ]
 
 

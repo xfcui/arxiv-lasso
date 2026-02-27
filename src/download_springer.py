@@ -118,7 +118,7 @@ def is_nature_journal(article: Dict[str, Any]) -> bool:
     journal = (article.get("journal") or "").lower()
     if not journal:
         return False
-    if journal.startswith("nature"):
+    if journal.startswith("nature") or journal.startswith("communications"):
         return True
     info = get_journal_info(journal)
     return info is not None and info.get("abbr") in ("nature", "ni")
@@ -137,7 +137,7 @@ def _strip_ns(tag: str) -> str:
 
 def parse_jats_xml(text: str) -> Tuple[Dict[str, str], Set[str]]:
     result: Dict[str, str] = {}
-    no_body_ids: Set[str] = Set()
+    no_body_ids: Set[str] = set()
     try:
         root = ET.fromstring(text)
     except ET.ParseError:
