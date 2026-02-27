@@ -15,8 +15,8 @@ from common import setup_proxy
 FEEDS: dict[str, str] = {
     "Nature": "https://www.nature.com/nature.rss",
     "Nature Immunology": "https://www.nature.com/ni.rss",
-    "Nature Methods": "https://www.nature.com/nmeth.rss",
     "Nature Biotechnology": "https://www.nature.com/nbt.rss",
+    "Nature Methods": "https://www.nature.com/nmeth.rss",
     "Nature Machine Intelligence": "https://www.nature.com/natmachintell.rss",
     "Nature Computational Science": "https://www.nature.com/natcomputsci.rss",
     "Science": "https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=science",

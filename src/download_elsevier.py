@@ -31,7 +31,7 @@ CHROME_CELL_GLOB: str = "chrome/cell/**/*.json"
 CHROME_IMMUNITY_GLOB: str = "chrome/immunity/**/*.json"
 MAX_RETRIES: int = 3
 RETRY_BACKOFF_SEC: int = 5
-PARALLEL_WORKERS: int = 12
+PARALLEL_WORKERS: int = 4
 
 _CONTENT_TAGS: tuple[str, ...] = ("<originalText>", "<body>", "<ce:sections>", "<abstract>")
 
@@ -119,20 +119,21 @@ def _has_full_content(text: str) -> bool:
     return any(tag in text for tag in _CONTENT_TAGS)
 
 
-def fetch_article(api_key: str, pii: str) -> tuple[str | None, str | None]:
+def fetch_article(api_key: str, pii: str, out_path: Path) -> tuple[bool, str | None]:
     """
-    Fetch article XML for the given display PII.
+    Fetch article XML for the given display PII and save directly to disk.
 
-    Returns (xml_text, error_message). Tries ENTITLED first; if Open Access,
+    Returns (success, error_message). Tries ENTITLED first; if Open Access,
     retries with FULL view to obtain the complete article body.
     Retries up to MAX_RETRIES times on 429 and network errors.
     
     Args:
         api_key: The Elsevier API key.
         pii: The display PII of the article.
+        out_path: The path to save the XML content.
         
     Returns:
-        A tuple of (XML content or None, error message or None).
+        A tuple of (success boolean, error message or None).
     """
     headers = {"X-ELS-APIKey": api_key, "Accept": "text/xml"}
     url = f"{BASE_URL}/{quote(pii_to_compact(pii), safe='')}"
@@ -149,7 +150,7 @@ def fetch_article(api_key: str, pii: str) -> tuple[str | None, str | None]:
                     try:
                         wait_sec = max(0, int(reset_time) - int(time.time())) + 1
                         if wait_sec > 3600: # If wait is more than an hour, maybe it's the weekly quota
-                            return None, f"Weekly quota exceeded. Resets in {wait_sec/3600:.1f} hours"
+                            return False, f"Weekly quota exceeded. Resets in {wait_sec/3600:.1f} hours"
                         print(f"\n[429] Rate limit hit. Waiting {wait_sec}s for reset (PII: {pii})")
                         time.sleep(wait_sec)
                         continue
@@ -166,41 +167,47 @@ def fetch_article(api_key: str, pii: str) -> tuple[str | None, str | None]:
 
             if "<document-entitlement>" not in resp.text:
                 if _has_full_content(resp.text):
-                    return resp.text, None
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
+                    out_path.write_text(resp.text, encoding="utf-8")
+                    return True, None
                 last_error = "ENTITLED returned no recognizable content"
                 break
 
             if "<status>OPEN_ACCESS</status>" not in resp.text:
-                return None, "not entitled (closed access)"
+                return False, "not entitled (closed access)"
 
-            resp_full = requests.get(url, headers=headers, params={"view": "FULL"}, timeout=60)
-            if resp_full.status_code == 429:
-                reset_time = resp_full.headers.get("X-RateLimit-Reset")
-                if reset_time:
-                    try:
-                        wait_sec = max(0, int(reset_time) - int(time.time())) + 1
-                        if wait_sec > 3600:
-                            return None, f"Weekly quota exceeded. Resets in {wait_sec/3600:.1f} hours"
-                        print(f"\n[429] Rate limit hit (FULL). Waiting {wait_sec}s for reset (PII: {pii})")
-                        time.sleep(wait_sec)
-                        continue
-                    except (ValueError, TypeError):
-                        pass
-                if attempt < MAX_RETRIES - 1:
-                    time.sleep(RETRY_BACKOFF_SEC * (attempt + 1))
-                continue
+            with requests.get(url, headers=headers, params={"view": "FULL"}, timeout=60, stream=True) as resp_full:
+                if resp_full.status_code == 429:
+                    reset_time = resp_full.headers.get("X-RateLimit-Reset")
+                    if reset_time:
+                        try:
+                            wait_sec = max(0, int(reset_time) - int(time.time())) + 1
+                            if wait_sec > 3600:
+                                return False, f"Weekly quota exceeded. Resets in {wait_sec/3600:.1f} hours"
+                            print(f"\n[429] Rate limit hit (FULL). Waiting {wait_sec}s for reset (PII: {pii})")
+                            time.sleep(wait_sec)
+                            continue
+                        except (ValueError, TypeError):
+                            pass
+                    if attempt < MAX_RETRIES - 1:
+                        time.sleep(RETRY_BACKOFF_SEC * (attempt + 1))
+                    continue
 
-            if resp_full.ok and "<document-entitlement>" not in resp_full.text and _has_full_content(resp_full.text):
-                return resp_full.text, None
+                if resp_full.ok:
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(out_path, "wb") as f:
+                        for chunk in resp_full.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                    return True, None
             
-            return None, "OA but FULL view returned no usable content"
+            return False, "OA but FULL view returned no usable content"
 
         except requests.RequestException as e:
             last_error = str(e)
             if attempt < MAX_RETRIES - 1:
                 time.sleep(RETRY_BACKOFF_SEC * (attempt + 1))
 
-    return None, last_error or "unknown error"
+    return False, last_error or "unknown error"
 
 
 def main() -> None:
@@ -274,17 +281,15 @@ def main() -> None:
 
     with ThreadPoolExecutor(max_workers=PARALLEL_WORKERS) as executor:
         future_to_task = {
-            executor.submit(fetch_article, api_key, pii): (pii, out_path)
+            executor.submit(fetch_article, api_key, pii, out_path): (pii, out_path)
             for pii, out_path in tasks
         }
         with tqdm(total=len(tasks), desc="Fetching articles", unit="art") as pbar:
             for future in as_completed(future_to_task):
                 pii, out_path = future_to_task[future]
                 try:
-                    xml_text, error = future.result()
-                    if xml_text is not None:
-                        out_path.parent.mkdir(parents=True, exist_ok=True)
-                        out_path.write_text(xml_text, encoding="utf-8")
+                    success, error = future.result()
+                    if success:
                         saved += 1
                     elif error and "not entitled" not in error:
                         pbar.write(f"Error {pii}: {error}")

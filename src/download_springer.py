@@ -36,7 +36,7 @@ DEFAULT_OUTPUT_DIR = "data/springer"
 META_BASE_URL = "https://api.springernature.com/meta/v2/json"
 JATS_BASE_URL = "https://api.springernature.com/openaccess/jats"
 BATCH_SIZE = 10
-PARALLEL_WORKERS = 5
+PARALLEL_WORKERS = 4
 MAX_RETRIES = 3
 RETRY_BACKOFF_SEC = 5
 
@@ -54,7 +54,7 @@ class SpringerAPI:
     def __init__(self, api_key: str):
         self.api_key = api_key
 
-    def _fetch_batch(self, base_url: str, dois: List[str]) -> Optional[requests.Response]:
+    def _fetch_batch(self, base_url: str, dois: List[str], save_path: Optional[Path] = None) -> Optional[requests.Response]:
         """Generic batch fetch with retry logic."""
         q = " OR ".join(f"doi:{d}" for d in dois)
         if len(dois) > 1:
@@ -64,17 +64,34 @@ class SpringerAPI:
         
         for attempt in range(MAX_RETRIES):
             try:
-                r = requests.get(base_url, params=params, timeout=60)
-                if r.status_code == 200:
+                if save_path:
+                    with requests.get(base_url, params=params, timeout=60, stream=True) as r:
+                        if r.status_code == 200:
+                            save_path.parent.mkdir(parents=True, exist_ok=True)
+                            with open(save_path, "wb") as f:
+                                for chunk in r.iter_content(chunk_size=8192):
+                                    f.write(chunk)
+                            return r
+                        if r.status_code == 429:
+                            logger.error("Error 429: Too Many Requests. Stopping.")
+                            return r
+                        if r.status_code >= 500:
+                            time.sleep(RETRY_BACKOFF_SEC * (attempt + 1))
+                            continue
+                        logger.warning(f"HTTP {r.status_code} for batch {dois[:2]}...")
+                        return r
+                else:
+                    r = requests.get(base_url, params=params, timeout=60)
+                    if r.status_code == 200:
+                        return r
+                    if r.status_code == 429:
+                        logger.error("Error 429: Too Many Requests. Stopping.")
+                        return r
+                    if r.status_code >= 500:
+                        time.sleep(RETRY_BACKOFF_SEC * (attempt + 1))
+                        continue
+                    logger.warning(f"HTTP {r.status_code} for batch {dois[:2]}...")
                     return r
-                if r.status_code == 429:
-                    logger.error("Error 429: Too Many Requests. Stopping.")
-                    return r
-                if r.status_code >= 500:
-                    time.sleep(RETRY_BACKOFF_SEC * (attempt + 1))
-                    continue
-                logger.warning(f"HTTP {r.status_code} for batch {dois[:2]}...")
-                return r
             except requests.RequestException as e:
                 logger.error(f"Request error: {e}")
                 if attempt < MAX_RETRIES - 1:
@@ -84,8 +101,8 @@ class SpringerAPI:
     def fetch_metadata(self, dois: List[str]) -> Optional[requests.Response]:
         return self._fetch_batch(META_BASE_URL, dois)
 
-    def fetch_jats(self, dois: List[str]) -> Optional[requests.Response]:
-        return self._fetch_batch(JATS_BASE_URL, dois)
+    def fetch_jats(self, dois: List[str], save_path: Optional[Path] = None) -> Optional[requests.Response]:
+        return self._fetch_batch(JATS_BASE_URL, dois, save_path=save_path)
 
 
 def load_env_api_key() -> str:
@@ -135,12 +152,51 @@ def _strip_ns(tag: str) -> str:
     return tag.split("}")[-1] if "}" in tag else tag
 
 
-def parse_jats_xml(text: str) -> Tuple[Dict[str, str], Set[str]]:
+def parse_jats_xml(text: str = "", file_path: Optional[Path] = None) -> Tuple[Dict[str, str], Set[str]]:
     result: Dict[str, str] = {}
     no_body_ids: Set[str] = set()
     try:
-        root = ET.fromstring(text)
-    except ET.ParseError:
+        if file_path:
+            context = ET.iterparse(file_path, events=("end",))
+            # Need to find 'records' first
+            records_found = False
+            for event, elem in context:
+                if _strip_ns(elem.tag) == "records":
+                    records_found = True
+                    # We don't break here because we need to process children
+                    # But iterparse for 'end' of 'records' might be too late
+                    # Let's use a different approach for streaming
+                    pass
+            
+            # Re-opening for a better streaming approach
+            context = ET.iterparse(file_path, events=("start", "end"))
+            _, root = next(context) # get root
+            
+            current_article = None
+            for event, elem in context:
+                tag = _strip_ns(elem.tag)
+                if event == "start" and tag == "article":
+                    current_article = elem
+                elif event == "end" and tag == "article":
+                    aid = None
+                    for sub_elem in elem.iter():
+                        if _strip_ns(sub_elem.tag) == "article-id" and sub_elem.get("pub-id-type") == "publisher-id":
+                            aid = (sub_elem.text or "").strip()
+                            break
+                    
+                    if aid:
+                        has_body = any(_strip_ns(c.tag) == "body" for c in elem)
+                        if not has_body:
+                            no_body_ids.add(aid)
+                        else:
+                            result[aid] = '<?xml version="1.0"?>\n' + ET.tostring(elem, encoding="unicode")
+                    
+                    root.clear() # Clear processed article from memory
+                    current_article = None
+            return result, no_body_ids
+        else:
+            root = ET.fromstring(text)
+    except (ET.ParseError, IOError):
         return result, no_body_ids
 
     records = next((elem for elem in root.iter() if _strip_ns(elem.tag) == "records"), None)
@@ -219,18 +275,22 @@ def process_batch(api: SpringerAPI, batch: List[Tuple[Dict[str, Any], Path, Path
     # Round 2: Fetch JATS if needed
     no_body_ids: Set[str] = set()
     if oa_dois_to_fetch:
-        r = api.fetch_jats(oa_dois_to_fetch)
+        temp_xml = Path("temp_springer_batch.xml")
+        r = api.fetch_jats(oa_dois_to_fetch, save_path=temp_xml)
         if r is not None:
             if r.status_code == 429:
+                if temp_xml.exists(): temp_xml.unlink()
                 return [], set(), True
             if r.status_code == 200:
-                by_id, nb_ids = parse_jats_xml(r.text)
+                by_id, nb_ids = parse_jats_xml(file_path=temp_xml)
                 no_body_ids.update(nb_ids)
                 for aid, xml_content in by_id.items():
                     xp = id_to_xml_path.get(aid)
                     if xp:
                         xp.parent.mkdir(parents=True, exist_ok=True)
                         xp.write_text(xml_content, encoding="utf-8")
+        if temp_xml.exists():
+            temp_xml.unlink()
 
     # Collect failures
     failures = []

@@ -51,8 +51,8 @@ TOOL = "arxiv-ncbi"
 
 DB = "pmc"
 SEARCH_RESULT_LIMIT = 9999  # NCBI caps at 9999; split date range when count >= this
-BATCH_SIZE = 30
-MAX_THREADS = 12
+BATCH_SIZE = 20
+MAX_THREADS = 4
 API_TIMEOUT = 300
 MAX_RETRIES = 3
 REQUEST_DELAY = 1
@@ -103,6 +103,7 @@ def _fetch_url_with_retry(
     max_retries: int = MAX_RETRIES,
     retry_delay: float = INITIAL_RETRY_DELAY,
     context: str = "",
+    save_path: Optional[Path] = None,
 ) -> Optional[bytes]:
     """Fetch URL with exponential backoff on HTTP 429.
 
@@ -111,6 +112,7 @@ def _fetch_url_with_retry(
         max_retries: Maximum number of retry attempts.
         retry_delay: Initial delay between retries.
         context: Contextual information for error logging.
+        save_path: Optional path to save the response content to.
 
     Returns:
         The response content as bytes, or None if the request failed.
@@ -119,7 +121,14 @@ def _fetch_url_with_retry(
     for _ in range(max_retries):
         try:
             with urllib.request.urlopen(url, timeout=API_TIMEOUT) as response:
-                data = response.read()
+                if save_path:
+                    save_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(save_path, "wb") as f:
+                        while chunk := response.read(8192):
+                            f.write(chunk)
+                    return b"" # Return empty bytes to indicate success
+                else:
+                    data = response.read()
             time.sleep(REQUEST_DELAY)
             return data
         except urllib.error.HTTPError as e:
@@ -393,25 +402,29 @@ def fetch_and_save_articles(pmcids: List[str], journal: str) -> None:
 
     params = _build_ncbi_params({"id": pmcid_list, "retmode": "xml"})
     url = f"{EFETCH_URL}?{urllib.parse.urlencode(params)}"
-    raw = _fetch_url_with_retry(url, context="efetch")
-    if raw is None:
-        return
-
-    try:
-        root = ET.fromstring(raw)
-    except ET.ParseError as e:
-        tqdm.write(f"Error parsing batch XML: {e}")
-        return
-
-    articles = root.findall("article")
-    if not articles and root.tag == "article":
-        articles = [root]
-    if not articles:
-        tqdm.write(f"Warning: No articles found in batch response for {pmcid_list}")
-        return
-
-    for article in articles:
-        _save_article(article, result_meta, journal)
+    
+    # Use iterparse to process the XML stream without loading the whole thing into memory
+    delay = INITIAL_RETRY_DELAY
+    for _ in range(MAX_RETRIES):
+        try:
+            with urllib.request.urlopen(url, timeout=API_TIMEOUT) as response:
+                context = ET.iterparse(response, events=("end",))
+                for event, elem in context:
+                    if elem.tag == "article":
+                        _save_article(elem, result_meta, journal)
+                        elem.clear() # Free memory
+                return
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                time.sleep(delay)
+                delay *= 2
+            else:
+                tqdm.write(f"HTTP Error (efetch): {e}")
+                return
+        except Exception as e:
+            tqdm.write(f"Error (efetch): {e}")
+            return
+    return
 
 
 def _collect_existing_pmcids(articles_dir: Path) -> Set[str]:
