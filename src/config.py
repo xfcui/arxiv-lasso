@@ -25,6 +25,26 @@ JOURNAL_MAP: dict[str, dict[str, str]] = {
         "full_name": "Nature Immunology",
         "path_name": "Nature_Immunology",
     },
+    "nbt": {
+        "abbr": "nbt",
+        "full_name": "Nature Biotechnology",
+        "path_name": "Nature_Biotechnology",
+    },
+    "nmeth": {
+        "abbr": "nmeth",
+        "full_name": "Nature Methods",
+        "path_name": "Nature_Methods",
+    },
+    "natmachintell": {
+        "abbr": "natmachintell",
+        "full_name": "Nature Machine Intelligence",
+        "path_name": "Nature_Machine_Intelligence",
+    },
+    "natcomputsci": {
+        "abbr": "natcomputsci",
+        "full_name": "Nature Computational Science",
+        "path_name": "Nature_Computational_Science",
+    },
     "science": {
         "abbr": "science",
         "full_name": "Science",

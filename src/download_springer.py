@@ -114,17 +114,21 @@ def get_output_paths(article: Dict[str, Any], output_dir: str) -> Tuple[Optional
     return base_path / f"{aid}_meta.json", base_path / f"{aid}.xml"
 
 
-def is_springer_article(article: Dict[str, Any]) -> bool:
-    url = article.get("url", "")
-    journal = article.get("journal", "")
-    if bool(url) and ("nature.com" in url or "springer.com" in url):
-        return True
+def is_nature_journal(article: Dict[str, Any]) -> bool:
+    journal = (article.get("journal") or "").lower()
     if not journal:
         return False
-    if journal.lower().startswith("nature") or "nature" in journal.lower():
+    if journal.startswith("nature"):
         return True
     info = get_journal_info(journal)
     return info is not None and info.get("abbr") in ("nature", "ni")
+
+
+def is_springer_article(article: Dict[str, Any]) -> bool:
+    url = article.get("url", "")
+    if bool(url) and ("nature.com" in url or "springer.com" in url):
+        return True
+    return is_nature_journal(article)
 
 
 def _strip_ns(tag: str) -> str:
@@ -265,7 +269,7 @@ def main():
     already_exists = 0
 
     for article in articles:
-        if not is_springer_article(article):
+        if not is_springer_article(article) or not is_nature_journal(article):
             continue
             
         doi = (article.get("doi") or "").strip()
