@@ -27,7 +27,7 @@ import requests
 from dotenv import load_dotenv
 from tqdm import tqdm
 
-from common import load_articles, path_safe_journal, setup_proxy, year_from_date
+from common import load_articles, log, path_safe_journal, setup_proxy, year_from_date
 from config import get_journal_info
 
 # --- Constants ---
@@ -41,12 +41,14 @@ MAX_RETRIES = 3
 RETRY_BACKOFF_SEC = 5
 
 # --- Logging Setup ---
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
-logger = logging.getLogger(__name__)
+def log_config():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)]
+    )
+
+# Replace logger calls with unified log
 
 class SpringerAPI:
     """Handles interactions with the Springer Nature API."""
@@ -73,27 +75,27 @@ class SpringerAPI:
                                     f.write(chunk)
                             return r
                         if r.status_code == 429:
-                            logger.error("Error 429: Too Many Requests. Stopping.")
+                            log("Error 429: Too Many Requests. Stopping.", level="ERROR")
                             return r
                         if r.status_code >= 500:
                             time.sleep(RETRY_BACKOFF_SEC * (attempt + 1))
                             continue
-                        logger.warning(f"HTTP {r.status_code} for batch {dois[:2]}...")
+                        log(f"HTTP {r.status_code} for batch {dois[:2]}...", level="WARNING")
                         return r
                 else:
                     r = requests.get(base_url, params=params, timeout=60)
                     if r.status_code == 200:
                         return r
                     if r.status_code == 429:
-                        logger.error("Error 429: Too Many Requests. Stopping.")
+                        log("Error 429: Too Many Requests. Stopping.", level="ERROR")
                         return r
                     if r.status_code >= 500:
                         time.sleep(RETRY_BACKOFF_SEC * (attempt + 1))
                         continue
-                    logger.warning(f"HTTP {r.status_code} for batch {dois[:2]}...")
+                    log(f"HTTP {r.status_code} for batch {dois[:2]}...", level="WARNING")
                     return r
             except requests.RequestException as e:
-                logger.error(f"Request error: {e}")
+                log(f"Request error: {e}", level="ERROR")
                 if attempt < MAX_RETRIES - 1:
                     time.sleep(RETRY_BACKOFF_SEC * (attempt + 1))
         return None
@@ -321,7 +323,7 @@ def main():
     if args.limit:
         articles = articles[:args.limit]
 
-    logger.info(f"Found {len(articles)} articles.")
+    log(f"Found {len(articles)} articles.")
 
     to_fetch = []
     seen_dois = set()
@@ -366,7 +368,7 @@ def main():
         to_fetch.append((article, mp, xp, doi))
         stats[journal]["processed"] += 1
 
-    logger.info(f"Processing {len(to_fetch)} articles ({already_exists} already exist).")
+    log(f"Processing {len(to_fetch)} articles ({already_exists} already exist).")
 
     batches = [to_fetch[i:i + args.batch_size] for i in range(0, len(to_fetch), args.batch_size)]
     doi_to_journal = {doi: a.get("journal", "Unknown") for a, _, _, doi in to_fetch}
@@ -395,11 +397,11 @@ def main():
                         stop_requested = True
                         executor.shutdown(wait=False, cancel_futures=True)
                 except Exception as e:
-                    logger.error(f"Batch failed: {e}")
+                    log(f"Batch failed: {e}", level="ERROR")
                 pbar.update(len(future_to_batch[future]))
 
     # Final Stats
-    logger.info("\n--- Stats ---")
+    log("--- Springer Stats ---")
     header = f"{'Journal':<40} {'Found':<8} {'ToProc':<8} {'Saved':<8} {'Failed':<8} {'Exist':<8}"
     print(header)
     print("-" * len(header))

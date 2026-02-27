@@ -33,6 +33,16 @@ def setup_proxy() -> None:
             socket.socket = socks.socksocket
 
 
+def log(msg: str, level: str = "INFO") -> None:
+    """Unified logging/print message style."""
+    from tqdm import tqdm
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    formatted_msg = f"{timestamp} [{level}] {msg}"
+    # Use tqdm.write if tqdm is active (to avoid breaking progress bars)
+    # This is a simple check; in a more complex setup we might use a proper logger
+    tqdm.write(formatted_msg)
+
+
 def parse_publication_date(s: str) -> datetime | None:
     """Parse a publication date string; return datetime or None."""
     if not s or not isinstance(s, str):

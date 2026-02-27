@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import socks
 import socket
 from dotenv import load_dotenv
+from common import log, setup_proxy
 from tqdm import tqdm
 
 load_dotenv()
@@ -33,11 +34,11 @@ if proxy_url:
             socket.setdefaulttimeout(600)
             socks.set_default_proxy(socks.SOCKS5, proxy_host, proxy_port, rdns=rdns)
             socket.socket = socks.socksocket
-            print(f"Proxy configured: {proxy_host}:{proxy_port} (rdns={rdns})")
+            log(f"Proxy configured: {proxy_host}:{proxy_port} (rdns={rdns})")
         else:
-            print(f"Warning: Unsupported proxy protocol: {parsed.scheme}. Use socks5/socks5h.")
+            log(f"Unsupported proxy protocol: {parsed.scheme}. Use socks5/socks5h.", level="WARNING")
     except Exception as e:
-        print(f"Error configuring proxy: {e}")
+        log(f"Error configuring proxy: {e}", level="ERROR")
 
 # NCBI E-Utilities URLs
 ESEARCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
@@ -79,7 +80,7 @@ class DownloadError(Exception):
 def _log_api_key_status() -> None:
     """Log whether NCBI API key is configured (call once at startup)."""
     if not API_KEY:
-        tqdm.write("NCBI API KEY not set. Rate limits will be more restrictive.")
+        log("NCBI API KEY not set. Rate limits will be more restrictive.", level="WARNING")
 
 
 def _build_ncbi_params(extra: Dict[str, Any]) -> Dict[str, Any]:
@@ -136,10 +137,10 @@ def _fetch_url_with_retry(
                 time.sleep(delay)
                 delay *= 2
             else:
-                tqdm.write(f"HTTP Error{f' ({context})' if context else ''}: {e}")
+                log(f"HTTP Error{f' ({context})' if context else ''}: {e}", level="ERROR")
                 return None
         except Exception as e:
-            tqdm.write(f"Error{f' ({context})' if context else ''}: {e}")
+            log(f"Error{f' ({context})' if context else ''}: {e}", level="ERROR")
             return None
     return None
 
@@ -223,7 +224,7 @@ def _search_articles_impl(
         try:
             data = json.loads(raw.decode())
         except json.JSONDecodeError as e:
-            tqdm.write(f"Error parsing search response for {journal}: {e}")
+            log(f"Error parsing search response for {journal}: {e}", level="ERROR")
             break
 
         result = data.get("esearchresult", {})
@@ -306,7 +307,7 @@ def fetch_metadata_json(pmcids: List[str]) -> Dict[str, Any]:
     try:
         return json.loads(raw.decode())
     except json.JSONDecodeError as e:
-        tqdm.write(f"Error parsing metadata JSON: {e}")
+        log(f"Error parsing metadata JSON: {e}", level="ERROR")
         return {}
 
 
@@ -419,10 +420,10 @@ def fetch_and_save_articles(pmcids: List[str], journal: str) -> None:
                 time.sleep(delay)
                 delay *= 2
             else:
-                tqdm.write(f"HTTP Error (efetch): {e}")
+                log(f"HTTP Error (efetch): {e}", level="ERROR")
                 return
         except Exception as e:
-            tqdm.write(f"Error (efetch): {e}")
+            log(f"Error (efetch): {e}", level="ERROR")
             return
     return
 
@@ -459,14 +460,14 @@ def process_journal_for_year(
     Returns:
         The number of newly downloaded articles.
     """
-    tqdm.write(f"Processing {journal} for {year}...")
+    log(f"Processing {journal} for {year}...")
 
     pmcids = search_articles(journal, year, year)
     if not pmcids:
         return 0
 
     to_download = [p for p in pmcids if _normalize_pmcid(p) not in existing_pmcids]
-    tqdm.write(f"- Found {len(to_download)}/{len(pmcids)} articles to download")
+    log(f"- Found {len(to_download)}/{len(pmcids)} articles to download")
     if not to_download:
         return 0
 
@@ -495,7 +496,7 @@ def process_journal_for_year(
             newly_downloaded = sum(results)
 
     to_download = [p for p in pmcids if _normalize_pmcid(p) not in existing_pmcids]
-    tqdm.write(f"- Found {len(to_download)}/{len(pmcids)} articles remaining")
+    log(f"- Found {len(to_download)}/{len(pmcids)} articles remaining")
 
     return newly_downloaded
 
@@ -506,7 +507,7 @@ def main() -> None:
 
     journals = JOURNALS
     if not journals:
-        tqdm.write("No journals to process. Exiting.")
+        log("No journals to process. Exiting.", level="WARNING")
         return
 
     today = datetime.date.today()
@@ -530,16 +531,17 @@ def main() -> None:
             total_downloaded += downloaded
             journal_stats[journal]["downloaded"] += downloaded
 
-    print(f"\n--- NCBI Stats ---")
-    print(f"{'Journal':<40} {'Downloaded':<12}")
-    print("-" * 55)
+    log("--- NCBI Stats ---")
+    header = f"{'Journal':<40} {'Downloaded':<12}"
+    log(header)
+    log("-" * 55)
     for journal in sorted(journal_stats.keys()):
         s = journal_stats[journal]
-        print(f"{journal[:39]:<40} {s['downloaded']:<12}")
-    print("-" * 55)
+        log(f"{journal[:39]:<40} {s['downloaded']:<12}")
+    log("-" * 55)
 
     final_count = len(existing_pmcids)
-    tqdm.write(f"Done. Downloaded: {total_downloaded} | Total on disk: {final_count} (was {initial_count})")
+    log(f"Done. Downloaded: {total_downloaded} | Total on disk: {final_count} (was {initial_count})")
 
 
 if __name__ == "__main__":

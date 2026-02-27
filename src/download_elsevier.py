@@ -22,7 +22,7 @@ import requests
 from dotenv import load_dotenv
 from tqdm import tqdm
 
-from common import load_articles, path_safe_journal, setup_proxy, year_from_date
+from common import load_articles, log, path_safe_journal, setup_proxy, year_from_date
 from config import get_journal_info
 
 BASE_URL: str = "https://api.elsevier.com/content/article/pii"
@@ -151,7 +151,7 @@ def fetch_article(api_key: str, pii: str, out_path: Path) -> tuple[bool, str | N
                         wait_sec = max(0, int(reset_time) - int(time.time())) + 1
                         if wait_sec > 3600: # If wait is more than an hour, maybe it's the weekly quota
                             return False, f"Weekly quota exceeded. Resets in {wait_sec/3600:.1f} hours"
-                        print(f"\n[429] Rate limit hit. Waiting {wait_sec}s for reset (PII: {pii})")
+                        log(f"Rate limit hit. Waiting {wait_sec}s for reset (PII: {pii})", level="WARNING")
                         time.sleep(wait_sec)
                         continue
                     except (ValueError, TypeError):
@@ -184,7 +184,7 @@ def fetch_article(api_key: str, pii: str, out_path: Path) -> tuple[bool, str | N
                             wait_sec = max(0, int(reset_time) - int(time.time())) + 1
                             if wait_sec > 3600:
                                 return False, f"Weekly quota exceeded. Resets in {wait_sec/3600:.1f} hours"
-                            print(f"\n[429] Rate limit hit (FULL). Waiting {wait_sec}s for reset (PII: {pii})")
+                            log(f"Rate limit hit (FULL). Waiting {wait_sec}s for reset (PII: {pii})", level="WARNING")
                             time.sleep(wait_sec)
                             continue
                         except (ValueError, TypeError):
@@ -266,15 +266,15 @@ def main() -> None:
         tasks.append((pii, out_path))
 
     if args.debug:
-        print("Debug mode: selecting 10 random articles.")
+        log("Debug mode: selecting 10 random articles.")
         tasks = random.sample(tasks, min(len(tasks), 10))
     else:
         random.shuffle(tasks)
 
-    print(f"Total articles found: {len(articles)}")
-    print(f"Articles to process: {len(tasks)}")
-    print(f"  Already exists: {already_exists}")
-    print(f"  Not Cell:       {not_cell}")
+    log(f"Total articles found: {len(articles)}")
+    log(f"Articles to process: {len(tasks)}")
+    log(f"  Already exists: {already_exists}")
+    log(f"  Not Cell:       {not_cell}")
 
     saved = skipped = errors = 0
     start_time = time.perf_counter()
@@ -302,12 +302,12 @@ def main() -> None:
                 pbar.update(1)
 
     elapsed = time.perf_counter() - start_time
-    print(f"\n--- Stats ---")
-    print(f"  Saved:        {saved}")
-    print(f"  Skipped:      {skipped} (closed access)")
-    print(f"  Errors:       {errors}")
-    print(f"  Total tasks:  {len(tasks)}")
-    print(f"  Time:         {elapsed:.1f}s")
+    log("--- Elsevier Stats ---")
+    log(f"  Saved:        {saved}")
+    log(f"  Skipped:      {skipped} (closed access)")
+    log(f"  Errors:       {errors}")
+    log(f"  Total tasks:  {len(tasks)}")
+    log(f"  Time:         {elapsed:.1f}s")
 
 
 if __name__ == "__main__":

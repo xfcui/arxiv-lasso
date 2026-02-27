@@ -9,7 +9,7 @@ from typing import Any
 
 import feedparser
 
-from common import setup_proxy
+from common import log, setup_proxy
 
 # List of RSS feeds provided
 FEEDS: dict[str, str] = {
@@ -124,20 +124,20 @@ def download_rss_metadata(feeds: dict[str, str], base_output_dir: str = "metadat
 
     # Skip if output file already exists
     if output_file.exists():
-        print(f"Output file already exists: {output_file}. Skipping download.")
+        log(f"Output file already exists: {output_file}. Skipping download.", level="WARNING")
         return
 
-    print(f"Ensured directory exists: {output_dir}")
+    log(f"Ensured directory exists: {output_dir}")
 
     for journal_name, url in feeds.items():
-        print(f"Fetching metadata for {journal_name}...")
+        log(f"Fetching metadata for {journal_name}...")
         try:
             # Parse the RSS feed
             feed = feedparser.parse(url)
             
             # Check for parsing errors
             if feed.bozo:
-                print(f"  Warning: Potential issue parsing {journal_name}: {feed.bozo_exception}")
+                log(f"Potential issue parsing {journal_name}: {feed.bozo_exception}", level="WARNING")
             
             count = 0
             for entry in feed.entries:
@@ -175,13 +175,13 @@ def download_rss_metadata(feeds: dict[str, str], base_output_dir: str = "metadat
                 count += 1
             
             stats[journal_name] = count
-            print(f"  Successfully downloaded {count} articles from {journal_name}.")
+            log(f"Successfully downloaded {count} articles from {journal_name}.")
             
             # Be polite to the servers
             time.sleep(1)
             
         except Exception as e:
-            print(f"  Error fetching {journal_name}: {e}")
+            log(f"Error fetching {journal_name}: {e}", level="ERROR")
 
     # Final JSON structure with metadata combined at the top
     output_data = {
@@ -197,7 +197,7 @@ def download_rss_metadata(feeds: dict[str, str], base_output_dir: str = "metadat
     with output_file.open("w", encoding="utf-8") as f:
         json.dump(output_data, f, indent=4, ensure_ascii=False)
     
-    print(f"\nTotal articles saved: {len(all_articles)} to {output_file}")
+    log(f"Total articles saved: {len(all_articles)} to {output_file}")
 
 
 if __name__ == "__main__":
