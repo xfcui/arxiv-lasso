@@ -120,11 +120,6 @@ def output_path(article: dict[str, Any], output_dir: str) -> Path | None:
         return None
     date_val = article.get("date") or ""
     year = year_from_date(date_val)
-    # #region agent log
-    from datetime import datetime
-    with open('/home/gateway/ncbi/.cursor/debug-cd2cd4.log', 'a') as f:
-        import json as j; f.write(j.dumps({"sessionId":"cd2cd4","hypothesisId":"D","location":"download_springer.py:111","message":"Output path calculation","data":{"url":article.get("url"),"date":date_val,"year":year},"timestamp":int(datetime.now().timestamp()*1000)}) + "\n")
-    # #endregion
     journal = path_safe_journal(article.get("journal") or "")
     return Path(output_dir) / year / journal / f"{aid}.xml"
 
